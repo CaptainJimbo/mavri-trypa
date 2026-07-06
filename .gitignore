@@ -1,0 +1,17 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Env
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Logs / scratch
+*.log
+.cache/
+.playwright-mcp/
