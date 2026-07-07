@@ -15,3 +15,7 @@ dist/
 *.log
 .cache/
 .playwright-mcp/
+.firecrawl/
+
+# Private Claude context (public spec lives in CLAUDE.md)
+CLAUDE.local.md
