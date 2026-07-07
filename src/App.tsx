@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import BlackHoleCanvas from './BlackHoleCanvas'
+import BlackHoleCanvas, { type SandMode } from './BlackHoleCanvas'
 import { ClockCard, FarClock } from './ClockPanel'
 import type { ClockInfo, SimState } from './clocks'
 
@@ -10,6 +10,8 @@ export default function App() {
   const [beaming, setBeaming] = useState(true)
   const [shift, setShift] = useState(true)
   const [clocks, setClocks] = useState<ClockInfo[]>([])
+  const [sandMode, setSandMode] = useState<SandMode>('none')
+  const [showTrue, setShowTrue] = useState(true)
   const simRef = useRef<SimState>({ t: 0, m: {} })
 
   const placeClock = useCallback((dir: [number, number, number], r: number) => {
@@ -38,7 +40,8 @@ export default function App() {
   return (
     <>
       <BlackHoleCanvas view={{ disc, beaming, shift }} clocks={clocks}
-        simRef={simRef} onPlace={placeClock} />
+        simRef={simRef} onPlace={placeClock}
+        sandbox={{ mode: sandMode, showTrue }} />
       <header className="hud">
         <h1>Μαύρη Τρύπα</h1>
         <p className="hint">
@@ -61,6 +64,22 @@ export default function App() {
             onChange={(e) => setShift(e.target.checked)} />
           grav + Doppler shift
         </label>
+        <div className="panel-group">
+          <span className="panel-title">lensing sandbox</span>
+          {(['none', 'star', 'grid'] as SandMode[]).map((m) => (
+            <label key={m}>
+              <input type="radio" name="sand" checked={sandMode === m}
+                onChange={() => setSandMode(m)} />
+              {m}
+            </label>
+          ))}
+          <label>
+            <input type="checkbox" checked={showTrue}
+              disabled={sandMode !== 'star'}
+              onChange={(e) => setShowTrue(e.target.checked)} />
+            show true position
+          </label>
+        </div>
       </aside>
       <footer className="clocks">
         <FarClock simRef={simRef} />

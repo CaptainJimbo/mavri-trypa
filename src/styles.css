@@ -118,3 +118,39 @@ html, body, #root {
   cursor: pointer;
 }
 .clock-actions button:hover { border-color: #ffa033; }
+
+.panel-group {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.panel-title {
+  opacity: 0.55;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+.ghost {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 1.5px dashed rgba(120, 200, 255, 0.9);
+  border-radius: 50%;
+  cursor: grab;
+  touch-action: none;
+}
+.ghost:active { cursor: grabbing; }
+.ghost span {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.65rem;
+  color: rgba(120, 200, 255, 0.9);
+  text-shadow: 0 1px 3px #000;
+}

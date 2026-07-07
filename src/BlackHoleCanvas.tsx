@@ -51,6 +51,9 @@ uniform int uNClocks;
 uniform vec3 uClockPos[3];
 uniform float uClockR[3]; // |uClockPos|, for the radial-band early-out
 uniform float uClockDelta[3];
+uniform int uSandMode; // lensing sandbox: 0 none, 1 star, 2 grid
+uniform vec3 uStarPos;
+uniform float uStarR; // |uStarPos|
 in vec2 vPos;
 out vec4 outColor;
 
@@ -59,6 +62,10 @@ const float DISC_IN = 3.0;   // ISCO
 const float DISC_OUT = 12.0;
 const float DISC_TEMP = 9000.0; // K at the inner edge
 const float CLOCK_RAD = 0.35;
+const float STAR_RAD = 0.7;
+const float GRID_DIST = 20.0; // backdrop plane, this far behind the hole
+const float GRID_HALF = 12.0;
+const float GRID_CELL = 2.0;
 
 vec3 skyColor(vec3 d) {
   float u = atan(d.z, d.x) / (2.0 * PI) + 0.5;
@@ -154,6 +161,10 @@ void main() {
   float phi = 0.0;
   float sPrev = n1; // s at phi = 0
   float cphPrev = 1.0, sphPrev = 0.0;
+  // Backdrop plane: x·e1 = -GRID_DIST; h tracks the signed distance factor
+  float hPrev = r0 + GRID_DIST;
+  vec3 gR = normalize(cross(vec3(0.0, 1.0, 0.0), e1));
+  vec3 gU = cross(e1, gR);
   bool escaped = false;
   for (int i = 0; i < MAX_STEPS; i++) {
     float uPrev = y.x;
@@ -184,33 +195,69 @@ void main() {
       sPrev = s;
     }
 
-    if (uNClocks > 0 && y.x > 1e-4 && uPrev > 1e-4) {
-      // Radial-band early-out: the segment can only touch a clock whose
-      // shell overlaps [min r, max r] of this step.
+    bool starHit = false;
+    if (y.x > 1e-4 && uPrev > 1e-4) {
       float rNew = 1.0 / y.x, rOld = 1.0 / uPrev;
-      float lo = min(rNew, rOld) - CLOCK_RAD, hi = max(rNew, rOld) + CLOCK_RAD;
-      for (int c = 0; c < 3; c++) {
-        if (c >= uNClocks) break;
-        if (uClockR[c] < lo || uClockR[c] > hi) continue;
+      // Radial-band early-out: the segment can only touch a sphere whose
+      // shell overlaps [min r, max r] of this step.
+      float lo = min(rNew, rOld), hi = max(rNew, rOld);
+      if (uNClocks > 0) {
+        for (int c = 0; c < 3; c++) {
+          if (c >= uNClocks) break;
+          if (uClockR[c] < lo - CLOCK_RAD || uClockR[c] > hi + CLOCK_RAD) continue;
+          vec3 pOld = (cphPrev * e1 + sphPrev * e2) * rOld;
+          vec3 pNew = (cph * e1 + sph * e2) * rNew;
+          vec3 ab = pNew - pOld;
+          float ab2 = max(dot(ab, ab), 1e-12);
+          vec3 ac = uClockPos[c] - pOld;
+          float tc = clamp(dot(ac, ab) / ab2, 0.0, 1.0);
+          float dc = length(pOld + tc * ab - uClockPos[c]);
+          if (dc < CLOCK_RAD && tc < bestT) {
+            bestT = tc;
+            bestClock = c;
+            bestQ = dc / CLOCK_RAD;
+          }
+        }
+      }
+      if (uSandMode == 1 &&
+          uStarR >= lo - STAR_RAD && uStarR <= hi + STAR_RAD) {
         vec3 pOld = (cphPrev * e1 + sphPrev * e2) * rOld;
         vec3 pNew = (cph * e1 + sph * e2) * rNew;
         vec3 ab = pNew - pOld;
         float ab2 = max(dot(ab, ab), 1e-12);
-        vec3 ac = uClockPos[c] - pOld;
+        vec3 ac = uStarPos - pOld;
         float tc = clamp(dot(ac, ab) / ab2, 0.0, 1.0);
-        float dc = length(pOld + tc * ab - uClockPos[c]);
-        if (dc < CLOCK_RAD && tc < bestT) {
+        float dc = length(pOld + tc * ab - uStarPos);
+        if (dc < STAR_RAD && tc < bestT) {
           bestT = tc;
-          bestClock = c;
-          bestQ = dc / CLOCK_RAD;
+          bestClock = -1;
+          starHit = true;
+          bestQ = dc / STAR_RAD;
         }
+      }
+      if (uSandMode == 2) { // checkerboard backdrop crossing
+        float hNew = cph * rNew + GRID_DIST;
+        if (hNew * hPrev < 0.0) {
+          float frac = hPrev / (hPrev - hNew);
+          vec3 pOld = (cphPrev * e1 + sphPrev * e2) * rOld;
+          vec3 pNew = (cph * e1 + sph * e2) * rNew;
+          vec3 P = mix(pOld, pNew, frac);
+          float lx = dot(P, gR), ly = dot(P, gU);
+          if (max(abs(lx), abs(ly)) < GRID_HALF && frac < bestT) {
+            float ck = mod(floor(lx / GRID_CELL) + floor(ly / GRID_CELL), 2.0);
+            outColor = vec4(mix(vec3(0.10, 0.14, 0.22), vec3(0.62, 0.68, 0.78), ck), 1.0);
+            return;
+          }
+        }
+        hPrev = hNew;
       }
     }
     cphPrev = cph; sphPrev = sph;
 
     if (bestT <= 1.0) {
-      outColor = bestClock >= 0
-        ? vec4(shadeClock(bestClock, bestQ), 1.0)
+      outColor = bestClock >= 0 ? vec4(shadeClock(bestClock, bestQ), 1.0)
+        : starHit ? vec4(pow(1.0 - exp(-6.0 * (1.0 - 0.7 * bestQ * bestQ) *
+            vec3(1.0, 0.93, 0.78)), vec3(1.0 / 2.2)), 1.0)
         : vec4(shadeDisc(bestR, bz), 1.0);
       return;
     }
@@ -238,6 +285,13 @@ export interface View {
   disc: boolean
   beaming: boolean
   shift: boolean
+}
+
+export type SandMode = 'none' | 'star' | 'grid'
+
+export interface Sandbox {
+  mode: SandMode
+  showTrue: boolean
 }
 
 /** 512×1 RGBA8 LUT of blackbody color vs temperature, log-spaced
@@ -295,19 +349,24 @@ function makeBlackbodyTexture(gl: WebGL2RenderingContext): WebGLTexture {
   return tex
 }
 
-export default function BlackHoleCanvas({ view, clocks, simRef, onPlace }: {
+export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox }: {
   view: View
   clocks: ClockInfo[]
   simRef: RefObject<SimState>
   onPlace: (dir: [number, number, number], r: number) => void
+  sandbox: Sandbox
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const ghostRef = useRef<HTMLDivElement>(null)
+  const starPos = useRef<[number, number, number] | null>(null)
   const viewRef = useRef(view)
   viewRef.current = view
   const clocksRef = useRef(clocks)
   clocksRef.current = clocks
   const onPlaceRef = useRef(onPlace)
   onPlaceRef.current = onPlace
+  const sandboxRef = useRef(sandbox)
+  sandboxRef.current = sandbox
 
   useEffect(() => {
     const canvas = canvasRef.current!
@@ -345,6 +404,9 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace }: {
     const uClockPos = uni('uClockPos[0]')
     const uClockR = uni('uClockR[0]')
     const uClockDelta = uni('uClockDelta[0]')
+    const uSandMode = uni('uSandMode')
+    const uStarPos = uni('uStarPos')
+    const uStarR = uni('uStarR')
 
     // Camera state (mutated by input handlers, read by the render loop).
     // dist is in units of r_s.
@@ -442,6 +504,30 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace }: {
       cam.dist = Math.max(2.5, Math.min(40, cam.dist * Math.exp(e.deltaY * 0.001)))
     }, { signal, passive: false })
 
+    // Ghost marker: drag moves the star's TRUE position in its picture plane
+    const ghost = ghostRef.current
+    if (ghost) {
+      let gDrag: { x: number; y: number } | null = null
+      ghost.addEventListener('pointerdown', (e) => {
+        e.stopPropagation()
+        gDrag = { x: e.clientX, y: e.clientY }
+        ghost.setPointerCapture(e.pointerId)
+      }, { signal })
+      ghost.addEventListener('pointermove', (e) => {
+        if (!gDrag || !starPos.current) return
+        const { pos, fwd, right, up } = basis()
+        const S = starPos.current
+        const z = (S[0] - pos[0]) * fwd[0] + (S[1] - pos[1]) * fwd[1] +
+          (S[2] - pos[2]) * fwd[2]
+        const wpp = 2 * z * Math.tan(cam.fov / 2) / canvas.clientHeight
+        const dx = (e.clientX - gDrag.x) * wpp
+        const dy = -(e.clientY - gDrag.y) * wpp
+        for (let i = 0; i < 3; i++) S[i] += right[i] * dx + up[i] * dy
+        gDrag = { x: e.clientX, y: e.clientY }
+      }, { signal })
+      ghost.addEventListener('pointerup', () => { gDrag = null }, { signal })
+    }
+
     const clockPos = new Float32Array(9)
     const clockR = new Float32Array(3)
     const clockDelta = new Float32Array(3)
@@ -476,6 +562,41 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace }: {
       gl.uniform3fv(uClockPos, clockPos)
       gl.uniform1fv(uClockR, clockR)
       gl.uniform1fv(uClockDelta, clockDelta)
+
+      const sb = sandboxRef.current
+      if (sb.mode === 'star' && !starPos.current) {
+        // first activation: place the star behind the hole as seen now
+        const { fwd } = basis()
+        starPos.current = [fwd[0] * 20, fwd[1] * 20, fwd[2] * 20]
+      }
+      const S = starPos.current
+      gl.uniform1i(uSandMode, sb.mode === 'star' ? 1 : sb.mode === 'grid' ? 2 : 0)
+      if (S) {
+        gl.uniform3f(uStarPos, S[0], S[1], S[2])
+        gl.uniform1f(uStarR, Math.hypot(...S))
+      }
+      // ghost marker at the star's straight-line (unlensed) screen position
+      const ghostEl = ghostRef.current
+      if (ghostEl) {
+        if (sb.mode === 'star' && sb.showTrue && S) {
+          const { pos, fwd, right, up } = basis()
+          const V = [S[0] - pos[0], S[1] - pos[1], S[2] - pos[2]]
+          const z = V[0] * fwd[0] + V[1] * fwd[1] + V[2] * fwd[2]
+          const x = V[0] * right[0] + V[1] * right[1] + V[2] * right[2]
+          const y = V[0] * up[0] + V[1] * up[1] + V[2] * up[2]
+          const tf = Math.tan(cam.fov / 2)
+          const aspect = canvas.width / canvas.height
+          if (z > 0.5) {
+            ghostEl.style.display = 'block'
+            ghostEl.style.left = `${(0.5 + x / (z * tf * aspect) / 2) * 100}%`
+            ghostEl.style.top = `${(0.5 - y / (z * tf) / 2) * 100}%`
+          } else {
+            ghostEl.style.display = 'none'
+          }
+        } else {
+          ghostEl.style.display = 'none'
+        }
+      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
     raf = requestAnimationFrame(frame)
@@ -490,5 +611,12 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace }: {
     }
   }, [simRef])
 
-  return <canvas ref={canvasRef} className="bh-canvas" />
+  return (
+    <>
+      <canvas ref={canvasRef} className="bh-canvas" />
+      <div ref={ghostRef} className="ghost" style={{ display: 'none' }}>
+        <span>true position</span>
+      </div>
+    </>
+  )
 }
