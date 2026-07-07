@@ -47,7 +47,7 @@ uniform sampler2D uSky;
 uniform sampler2D uBB; // blackbody LUT: rgb = chromaticity, a = log10 luminance
 uniform float uYaw, uPitch, uFov, uAspect, uCamDist;
 uniform float uDisc, uBeaming, uShift, uOverlays;
-uniform float uDiscTemp, uDiscOut, uExposure;
+uniform float uDiscTemp, uDiscOut, uExposure, uTime;
 uniform int uNClocks;
 uniform vec3 uClockPos[3];
 uniform float uClockR[3]; // |uClockPos|, for the radial-band early-out
@@ -91,7 +91,39 @@ vec4 blackbody(float T) {
   return vec4(s.rgb, pow(10.0, s.a * 8.0 - 4.0)); // a encodes log10(Y) in [-4,4]
 }
 
-vec3 shadeDisc(float r, float bz) {
+float hash21(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// value noise, periodic in x with the given integer period
+float vnoise(vec2 p, float period) {
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(vec2(mod(i.x, period), i.y));
+  float b = hash21(vec2(mod(i.x + 1.0, period), i.y));
+  float c = hash21(vec2(mod(i.x, period), i.y + 1.0));
+  float d = hash21(vec2(mod(i.x + 1.0, period), i.y + 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+/** Turbulent density streaks, advected by the real Keplerian angular
+ * velocity Omega(r) — inner material overtakes outer, so the pattern
+ * shears differentially instead of rotating rigidly. Density modulation
+ * only; the fake-turbulence idea follows ebruneton/black_hole_shader
+ * (BSD-3), the noise here is our own. */
+float discDensity(float r, float theta) {
+  float ph = (theta - uTime * inversesqrt(2.0 * r * r * r)) / (2.0 * PI);
+  float lr = log(r);
+  float n = 0.55 * vnoise(vec2(ph * 16.0, lr * 14.0), 16.0)
+          + 0.30 * vnoise(vec2(ph * 32.0, lr * 34.0), 32.0)
+          + 0.15 * vnoise(vec2(ph * 64.0, lr * 70.0), 64.0);
+  // soften the hard geometric edges into a glow falloff
+  float edge = smoothstep(DISC_IN, DISC_IN + 0.35, r)
+             * (1.0 - smoothstep(uDiscOut - 1.2, uDiscOut, r));
+  return (0.45 + 1.1 * n) * edge;
+}
+
+vec3 shadeDisc(float r, float theta, float bz) {
   float T = uDiscTemp * pow(r / DISC_IN, -0.75);
   float ff = 1.0 - 1.5 / r;          // circular-orbit dilation (grav + transverse)
   float f0 = 1.0 - 1.0 / uCamDist;   // static-camera potential
@@ -99,7 +131,7 @@ vec3 shadeDisc(float r, float bz) {
   float delta = sqrt(ff) / (sqrt(f0) * (1.0 - Omega * bz));
   float Tc = uShift > 0.5 ? delta * T : T;   // shift owns the color
   float Tb = uBeaming > 0.5 ? delta * T : T; // beaming owns the brightness
-  vec3 lin = blackbody(Tc).rgb * blackbody(Tb).a;
+  vec3 lin = blackbody(Tc).rgb * blackbody(Tb).a * discDensity(r, theta);
   return pow(1.0 - exp(-1.5 * uExposure * lin), vec3(1.0 / 2.2)); // exposure + gamma
 }
 
@@ -178,7 +210,7 @@ void main() {
     // Nearest event (disc crossing or clock hit) along this step's segment,
     // both parameterized 0..1 from the step start.
     float bestT = 2.0;
-    float bestR = 0.0, bestQ = 0.0;
+    float bestR = 0.0, bestQ = 0.0, bestTheta = 0.0;
     int bestClock = -1;
 
     if ((uDisc > 0.5 || uOverlays > 0.5) && !edgeOn) {
@@ -194,6 +226,9 @@ void main() {
         if (uDisc > 0.5 && rHit >= DISC_IN && rHit <= uDiscOut) {
           bestT = frac;
           bestR = rHit;
+          float phiHit = phi - DPHI + frac * DPHI;
+          vec3 pHit = (cos(phiHit) * e1 + sin(phiHit) * e2) * rHit;
+          bestTheta = atan(pHit.z, pHit.x);
         }
       }
       sPrev = s;
@@ -262,7 +297,7 @@ void main() {
       outColor = bestClock >= 0 ? vec4(shadeClock(bestClock, bestQ), 1.0)
         : starHit ? vec4(pow(1.0 - exp(-6.0 * (1.0 - 0.7 * bestQ * bestQ) *
             vec3(1.0, 0.93, 0.78)), vec3(1.0 / 2.2)), 1.0)
-        : vec4(shadeDisc(bestR, bz), 1.0);
+        : vec4(shadeDisc(bestR, bestTheta, bz), 1.0);
       return;
     }
 
@@ -414,6 +449,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     const uOverlays = uni('uOverlays')
     const uDiscTemp = uni('uDiscTemp'), uDiscOut = uni('uDiscOut')
     const uExposure = uni('uExposure')
+    const uTime = uni('uTime')
     const uNClocks = uni('uNClocks')
     const uClockPos = uni('uClockPos[0]')
     const uClockR = uni('uClockR[0]')
@@ -571,6 +607,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
       gl.uniform1f(uDiscTemp, v.discTemp)
       gl.uniform1f(uDiscOut, v.discOut)
       gl.uniform1f(uExposure, v.exposure)
+      gl.uniform1f(uTime, simRef.current.t)
       if (readoutRef.current) {
         readoutRef.current.textContent =
           `r ${cam.dist.toFixed(1)} rₛ · i ${(cam.pitch * 180 / Math.PI).toFixed(0)}°`
