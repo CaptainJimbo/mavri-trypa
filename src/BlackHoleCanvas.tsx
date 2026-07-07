@@ -485,7 +485,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB,
       gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0]))
     const img = new Image()
-    img.src = `${import.meta.env.BASE_URL}assets/starmap_2020_4k.png`
+    img.src = `${import.meta.env.BASE_URL}assets/starmap_2020_4k.webp`
     img.onload = () => {
       gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, sky)
