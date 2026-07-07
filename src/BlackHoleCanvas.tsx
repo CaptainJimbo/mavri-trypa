@@ -1,16 +1,25 @@
 import { useEffect, useRef } from 'react'
 
-/** Build-spine step 2: per-pixel Schwarzschild null geodesics. Each ray is
- * integrated in its orbital plane in Binet form u(φ) = 1/r (units rₛ = 1):
+/** Build-spine step 3: Schwarzschild geodesics + thin accretion disc.
  *
- *   u″ = −u(1 − 1.5u)
+ * Each ray is integrated in its orbital plane in Binet form u(φ) = 1/r
+ * (units rₛ = 1):  u″ = −u(1 − 1.5u), RK4, fixed dφ. Capture (u > 1) →
+ * black; escape → sky along the exit direction −u′·r̂ + u·θ̂. The shadow
+ * and photon ring emerge from rays under b_crit = 3√3/2 rₛ never reaching
+ * the sky. Written from scratch; the Binet-form initial conditions follow
+ * oseiskar/black-hole (MIT) — see docs/PRIOR_ART_NOTES.md.
  *
- * RK4, fixed dφ step. Capture (u > 1) → black; escape → sky along the exit
- * direction −u′·r̂ + u·θ̂. The shadow and photon ring are not drawn — they
- * emerge from rays with impact parameter under b_crit = 3√3/2 rₛ never
- * reaching the sky. Written from scratch; the Binet-form initial conditions
- * follow the approach in oseiskar/black-hole (MIT) — see
- * docs/PRIOR_ART_NOTES.md (their integrand has a typo we don't inherit).
+ * Disc: opaque, equatorial, ISCO (r = 3) to r = 14, T(r) ∝ r^(−3/4)
+ * (Shakura–Sunyaev scaling). Emitters are circular Keplerian orbits; the
+ * observed frequency ratio is exact GR for a static camera:
+ *
+ *   δ = ν_obs/ν_em = √(1 − 3/(2r)) / (√(1 − 1/r_cam) · (1 − Ω b_z))
+ *
+ * with Ω = 1/√(2r³) and b_z the photon's impact parameter about the disc
+ * axis. A Doppler-shifted blackbody is again a blackbody at δT (Bruneton's
+ * observation), so: the SHIFT toggle colors the disc with the chromaticity
+ * of a blackbody at δT, the BEAMING toggle brightens it with the luminance
+ * of a blackbody at δT — both on together is the exact observed spectrum.
  *
  * Skybox: NASA SVS "Deep Star Maps 2020" (public domain), tonemapped from
  * the source EXR (exposure ×2, sRGB gamma). https://svs.gsfc.nasa.gov/4851
@@ -27,11 +36,16 @@ void main() {
 const FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D uSky;
+uniform sampler2D uBB; // blackbody LUT: rgb = chromaticity, a = log10 luminance
 uniform float uYaw, uPitch, uFov, uAspect, uCamDist;
+uniform float uDisc, uBeaming, uShift;
 in vec2 vPos;
 out vec4 outColor;
 
 const float PI = 3.14159265358979;
+const float DISC_IN = 3.0;   // ISCO
+const float DISC_OUT = 12.0;
+const float DISC_TEMP = 9000.0; // K at the inner edge
 
 vec3 skyColor(vec3 d) {
   float u = atan(d.z, d.x) / (2.0 * PI) + 0.5;
@@ -51,6 +65,25 @@ vec3 skyColor(vec3 d) {
   return texture(uSky, uv).rgb;
 }
 
+// LUT spans 1000..30000 K, log-spaced (see makeBlackbodyTexture)
+vec4 blackbody(float T) {
+  float x = (log(T) - log(1000.0)) / (log(30000.0) - log(1000.0));
+  vec4 s = texture(uBB, vec2(clamp(x, 0.0, 1.0), 0.5));
+  return vec4(s.rgb, pow(10.0, s.a * 8.0 - 4.0)); // a encodes log10(Y) in [-4,4]
+}
+
+vec3 shadeDisc(float r, float bz) {
+  float T = DISC_TEMP * pow(r / DISC_IN, -0.75);
+  float ff = 1.0 - 1.5 / r;          // circular-orbit dilation (grav + transverse)
+  float f0 = 1.0 - 1.0 / uCamDist;   // static-camera potential
+  float Omega = inversesqrt(2.0 * r * r * r);
+  float delta = sqrt(ff) / (sqrt(f0) * (1.0 - Omega * bz));
+  float Tc = uShift > 0.5 ? delta * T : T;   // shift owns the color
+  float Tb = uBeaming > 0.5 ? delta * T : T; // beaming owns the brightness
+  vec3 lin = blackbody(Tc).rgb * blackbody(Tb).a;
+  return pow(1.0 - exp(-1.5 * lin), vec3(1.0 / 2.2)); // exposure + gamma
+}
+
 // Binet system: y = (u, du/dphi), y' = (u', -u(1 - 1.5u))
 vec2 geodesicRHS(vec2 y) {
   return vec2(y.y, -y.x * (1.0 - 1.5 * y.x));
@@ -61,7 +94,7 @@ const float DPHI = 0.025;
 
 void main() {
   // Orbit camera: on a sphere of radius uCamDist (units of r_s), looking at
-  // the hole at the origin.
+  // the hole at the origin. The disc lies in the world y = 0 plane.
   float cy = cos(uYaw), sy = sin(uYaw);
   float cp = cos(uPitch), sp = sin(uPitch);
   vec3 camPos = uCamDist * vec3(cp * cy, sp, cp * sy);
@@ -86,16 +119,41 @@ void main() {
   vec3 e2 = dperp / dtan;
 
   vec2 y = vec2(1.0 / r0, -(1.0 / r0) * ddotr / dtan);
+
+  // Disc-plane crossing: world height ∝ s(phi) = n1 cos(phi) + n2 sin(phi)
+  float n1 = e1.y, n2 = e2.y;
+  bool edgeOn = abs(n1) + abs(n2) < 1e-4; // camera in the disc plane: skip disc
+  // Photon angular momentum about the disc axis, per unit energy:
+  // b_z = b (m·ŷ) with m the geodesic-plane normal and b = 1/e.
+  float esq = y.y * y.y + y.x * y.x * (1.0 - y.x);
+  float bz = dot(cross(e1, e2), vec3(0.0, 1.0, 0.0)) * inversesqrt(esq);
+
   float phi = 0.0;
+  float sPrev = n1; // s at phi = 0
   bool escaped = false;
   for (int i = 0; i < MAX_STEPS; i++) {
+    float uPrev = y.x;
     vec2 k1 = geodesicRHS(y);
     vec2 k2 = geodesicRHS(y + 0.5 * DPHI * k1);
     vec2 k3 = geodesicRHS(y + 0.5 * DPHI * k2);
     vec2 k4 = geodesicRHS(y + DPHI * k3);
     y += (DPHI / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
     phi += DPHI;
-    if (y.x > 1.0) break;                        // r < r_s: captured
+
+    if (uDisc > 0.5 && !edgeOn) {
+      float s = n1 * cos(phi) + n2 * sin(phi);
+      if (s * sPrev < 0.0) { // crossed the disc plane during this step
+        float frac = sPrev / (sPrev - s);
+        float rHit = 1.0 / mix(uPrev, y.x, frac);
+        if (rHit >= DISC_IN && rHit <= DISC_OUT) {
+          outColor = vec4(shadeDisc(rHit, bz), 1.0);
+          return;
+        }
+      }
+      sPrev = s;
+    }
+
+    if (y.x > 1.0) break;                         // r < r_s: captured
     if (y.x < 0.0 || (y.y < 0.0 && y.x < 0.01)) { // outbound and far: escaped
       escaped = true;
       break;
@@ -114,8 +172,71 @@ void main() {
   outColor = vec4(skyColor(outDir), 1.0);
 }`
 
-export default function BlackHoleCanvas() {
+export interface View {
+  disc: boolean
+  beaming: boolean
+  shift: boolean
+}
+
+/** 512×1 RGBA8 LUT of blackbody color vs temperature, log-spaced
+ * 1000..30000 K. rgb = linear-sRGB chromaticity (max component = 1);
+ * a = log10 of luminance relative to 6500 K, mapped from [-4, 4].
+ * Planck spectrum integrated against the CIE 1931 observer using the
+ * piecewise-Gaussian fits of Wyman, Sloan & Shirley (JCGT 2013). */
+function makeBlackbodyTexture(gl: WebGL2RenderingContext): WebGLTexture {
+  const N = 512
+  const gauss = (x: number, m: number, s1: number, s2: number) => {
+    const s = x < m ? s1 : s2
+    return Math.exp(-0.5 * ((x - m) / s) ** 2)
+  }
+  const xbar = (l: number) =>
+    1.056 * gauss(l, 599.8, 37.9, 31.0) + 0.362 * gauss(l, 442.0, 16.0, 26.7) -
+    0.065 * gauss(l, 501.1, 20.4, 26.2)
+  const ybar = (l: number) =>
+    0.821 * gauss(l, 568.8, 46.9, 40.5) + 0.286 * gauss(l, 530.9, 16.3, 31.1)
+  const zbar = (l: number) =>
+    1.217 * gauss(l, 437.0, 11.8, 36.0) + 0.681 * gauss(l, 459.0, 26.0, 13.8)
+
+  const xyz = (T: number) => {
+    let X = 0, Y = 0, Z = 0
+    for (let l = 380; l <= 780; l += 5) {
+      const B = 1 / (l / 1e3) ** 5 / (Math.expm1(1.4388e7 / (l * T)))
+      X += B * xbar(l)
+      Y += B * ybar(l)
+      Z += B * zbar(l)
+    }
+    return [X, Y, Z]
+  }
+
+  const Yref = xyz(6500)[1]
+  const data = new Uint8Array(N * 4)
+  for (let i = 0; i < N; i++) {
+    const T = 1000 * Math.exp((i / (N - 1)) * Math.log(30))
+    const [X, Y, Z] = xyz(T)
+    let r = 3.2406 * X - 1.5372 * Y - 0.4986 * Z
+    let g = -0.9689 * X + 1.8758 * Y + 0.0415 * Z
+    let b = 0.0557 * X - 0.204 * Y + 1.057 * Z
+    r = Math.max(r, 0); g = Math.max(g, 0); b = Math.max(b, 0)
+    const m = Math.max(r, g, b, 1e-12)
+    const q = Math.min(Math.max(Math.log10(Y / Yref), -4), 4)
+    data[i * 4] = Math.round((r / m) * 255)
+    data[i * 4 + 1] = Math.round((g / m) * 255)
+    data[i * 4 + 2] = Math.round((b / m) * 255)
+    data[i * 4 + 3] = Math.round(((q + 4) / 8) * 255)
+  }
+
+  const tex = gl.createTexture()!
+  gl.bindTexture(gl.TEXTURE_2D, tex)
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, N, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, data)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+  return tex
+}
+
+export default function BlackHoleCanvas({ view }: { view: View }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const viewRef = useRef(view)
+  viewRef.current = view
 
   useEffect(() => {
     const canvas = canvasRef.current!
@@ -148,12 +269,14 @@ export default function BlackHoleCanvas() {
     const uYaw = uni('uYaw'), uPitch = uni('uPitch')
     const uFov = uni('uFov'), uAspect = uni('uAspect')
     const uCamDist = uni('uCamDist')
+    const uDisc = uni('uDisc'), uBeaming = uni('uBeaming'), uShift = uni('uShift')
 
     // Camera state (mutated by input handlers, read by the render loop).
     // dist is in units of r_s.
-    const cam = { yaw: 0.3, pitch: 0.1, dist: 12, fov: (60 * Math.PI) / 180 }
+    const cam = { yaw: 0.3, pitch: 0.35, dist: 17, fov: (60 * Math.PI) / 180 }
 
     let skyReady = false
+    gl.activeTexture(gl.TEXTURE0)
     const sky = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, sky)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, 1, 1, 0, gl.RGB,
@@ -161,6 +284,7 @@ export default function BlackHoleCanvas() {
     const img = new Image()
     img.src = `${import.meta.env.BASE_URL}assets/starmap_2020_4k.png`
     img.onload = () => {
+      gl.activeTexture(gl.TEXTURE0)
       gl.bindTexture(gl.TEXTURE_2D, sky)
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img)
       gl.generateMipmap(gl.TEXTURE_2D)
@@ -169,6 +293,11 @@ export default function BlackHoleCanvas() {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
       skyReady = true
     }
+
+    gl.activeTexture(gl.TEXTURE1)
+    makeBlackbodyTexture(gl)
+    gl.uniform1i(uni('uSky'), 0)
+    gl.uniform1i(uni('uBB'), 1)
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio, 2)
@@ -203,12 +332,16 @@ export default function BlackHoleCanvas() {
     const frame = () => {
       raf = requestAnimationFrame(frame)
       if (!skyReady) return
+      const v = viewRef.current
       gl.viewport(0, 0, canvas.width, canvas.height)
       gl.uniform1f(uYaw, cam.yaw)
       gl.uniform1f(uPitch, cam.pitch)
       gl.uniform1f(uFov, cam.fov)
       gl.uniform1f(uAspect, canvas.width / canvas.height)
       gl.uniform1f(uCamDist, cam.dist)
+      gl.uniform1f(uDisc, v.disc ? 1 : 0)
+      gl.uniform1f(uBeaming, v.beaming ? 1 : 0)
+      gl.uniform1f(uShift, v.shift ? 1 : 0)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
     raf = requestAnimationFrame(frame)
