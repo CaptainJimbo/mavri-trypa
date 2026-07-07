@@ -5,13 +5,33 @@ import type { ClockInfo, SimState } from './clocks'
 
 let nextId = 1
 
+/** rₛ = 2GM/c² = 2.953 km per solar mass. */
+function scaleLegend(logM: number) {
+  const M = 10 ** logM
+  const km = 2.953 * M
+  const ms = (km / 299792.458) * 1000
+  const mass = logM < 4 ? `${Math.round(M)} M☉` : `10^${logM.toFixed(1)} M☉`
+  const size = km < 1e4 ? `${km.toFixed(1)} km`
+    : km < 1e7 ? `${(km / 1e6).toFixed(2)}M km`
+    : `${(km / 1.496e8).toFixed(2)} AU`
+  const time = ms < 1000 ? `${ms.toPrecision(2)} light-ms` : `${(ms / 1000).toPrecision(2)} light-s`
+  return { mass, size, time }
+}
+
 export default function App() {
   const [disc, setDisc] = useState(true)
   const [beaming, setBeaming] = useState(true)
   const [shift, setShift] = useState(true)
+  const [overlays, setOverlays] = useState(false)
+  const [discTemp, setDiscTemp] = useState(9000)
+  const [discOut, setDiscOut] = useState(12)
+  const [timeRate, setTimeRate] = useState(1)
+  const [quality, setQuality] = useState(1)
+  const [logM, setLogM] = useState(1)
   const [clocks, setClocks] = useState<ClockInfo[]>([])
   const [sandMode, setSandMode] = useState<SandMode>('none')
   const [showTrue, setShowTrue] = useState(true)
+  const [showCaption, setShowCaption] = useState(true)
   const simRef = useRef<SimState>({ t: 0, m: {} })
 
   const placeClock = useCallback((dir: [number, number, number], r: number) => {
@@ -37,10 +57,33 @@ export default function App() {
     setClocks((cs) => cs.filter((c) => c.id !== id))
   }
 
+  const caption = (() => {
+    if (clocks.some((c) => simRef.current.m[c.id]?.falling))
+      return 'From out here, the falling clock never crosses — its last tick takes forever.'
+    if (clocks.length > 0)
+      return 'The lower clock ticks slower. Not the mechanism — time itself.'
+    if (sandMode === 'star')
+      return 'One star, several images. Line it up behind the hole and they fuse into a ring.'
+    if (sandMode === 'grid')
+      return "The checkerboard is flat and its lines are straight. Space isn't."
+    if (overlays)
+      return "Three radii nothing ignores: the horizon, light's last orbit, matter's last stable orbit."
+    if (!disc)
+      return 'Every star here is real catalog light, bent — near the edge it wraps the hole more than once.'
+    if (!beaming)
+      return 'Beaming off: both sides equally bright. The lopsidedness you removed was special relativity.'
+    if (!shift)
+      return 'Shift off: true local colors. Turn it on to see gravity redden the light climbing out.'
+    return "That arch over the shadow is the disc's far side — you're seeing behind the hole."
+  })()
+
+  const legend = scaleLegend(logM)
+
   return (
     <>
-      <BlackHoleCanvas view={{ disc, beaming, shift }} clocks={clocks}
-        simRef={simRef} onPlace={placeClock}
+      <BlackHoleCanvas
+        view={{ disc, beaming, shift, overlays, discTemp, discOut, timeRate, quality }}
+        clocks={clocks} simRef={simRef} onPlace={placeClock}
         sandbox={{ mode: sandMode, showTrue }} />
       <header className="hud">
         <h1>Μαύρη Τρύπα</h1>
@@ -48,39 +91,102 @@ export default function App() {
           drag to orbit · scroll to approach · click to drop a clock
         </p>
       </header>
-      <aside className="panel">
-        <label>
-          <input type="checkbox" checked={disc}
-            onChange={(e) => setDisc(e.target.checked)} />
-          accretion disc
-        </label>
-        <label>
-          <input type="checkbox" checked={beaming} disabled={!disc}
-            onChange={(e) => setBeaming(e.target.checked)} />
-          Doppler beaming
-        </label>
-        <label>
-          <input type="checkbox" checked={shift} disabled={!disc}
-            onChange={(e) => setShift(e.target.checked)} />
-          grav + Doppler shift
-        </label>
-        <div className="panel-group">
-          <span className="panel-title">lensing sandbox</span>
-          {(['none', 'star', 'grid'] as SandMode[]).map((m) => (
-            <label key={m}>
-              <input type="radio" name="sand" checked={sandMode === m}
-                onChange={() => setSandMode(m)} />
-              {m}
-            </label>
-          ))}
+
+      <aside className="rack">
+        <section>
+          <h2>spacetime</h2>
+          <label className="slider">
+            <span>mass</span>
+            <input type="range" min={0} max={8} step={0.1} value={logM}
+              onChange={(e) => setLogM(+e.target.value)} />
+            <output>{legend.mass}</output>
+          </label>
+          <div className="scalebar" aria-label="scale legend">
+            <div className="scalebar-rule" />
+            <p>rₛ = {legend.size} ≈ {legend.time}</p>
+            <p className="fineprint">the image is mass-invariant — only the scale changes</p>
+          </div>
+          <label>
+            <input type="checkbox" checked={overlays}
+              onChange={(e) => setOverlays(e.target.checked)} />
+            labeled radii
+          </label>
+          {overlays && (
+            <ul className="legend">
+              <li><i style={{ background: '#ff5a47' }} />horizon · 1 rₛ</li>
+              <li><i style={{ background: '#55c8ff' }} />photon sphere · 1.5 rₛ</li>
+              <li><i style={{ background: '#ffc24d' }} />ISCO · 3 rₛ</li>
+            </ul>
+          )}
+        </section>
+
+        <section>
+          <h2>accretion disc</h2>
+          <label>
+            <input type="checkbox" checked={disc}
+              onChange={(e) => setDisc(e.target.checked)} />
+            disc
+          </label>
+          <label>
+            <input type="checkbox" checked={beaming} disabled={!disc}
+              onChange={(e) => setBeaming(e.target.checked)} />
+            Doppler beaming
+          </label>
+          <label>
+            <input type="checkbox" checked={shift} disabled={!disc}
+              onChange={(e) => setShift(e.target.checked)} />
+            grav + Doppler shift
+          </label>
+          <label className="slider">
+            <span>temp</span>
+            <input type="range" min={3000} max={20000} step={250} value={discTemp}
+              disabled={!disc} onChange={(e) => setDiscTemp(+e.target.value)} />
+            <output>{discTemp} K at ISCO</output>
+          </label>
+          <label className="slider">
+            <span>size</span>
+            <input type="range" min={6} max={14} step={0.5} value={discOut}
+              disabled={!disc} onChange={(e) => setDiscOut(+e.target.value)} />
+            <output>out to {discOut} rₛ</output>
+          </label>
+        </section>
+
+        <section>
+          <h2>lensing sandbox</h2>
+          <div className="radio-row">
+            {(['none', 'star', 'grid'] as SandMode[]).map((m) => (
+              <label key={m}>
+                <input type="radio" name="sand" checked={sandMode === m}
+                  onChange={() => setSandMode(m)} />
+                {m}
+              </label>
+            ))}
+          </div>
           <label>
             <input type="checkbox" checked={showTrue}
               disabled={sandMode !== 'star'}
               onChange={(e) => setShowTrue(e.target.checked)} />
             show true position
           </label>
-        </div>
+        </section>
+
+        <section>
+          <h2>clocks &amp; render</h2>
+          <label className="slider">
+            <span>time</span>
+            <input type="range" min={0.25} max={8} step={0.25} value={timeRate}
+              onChange={(e) => setTimeRate(+e.target.value)} />
+            <output>×{timeRate}</output>
+          </label>
+          <label className="slider">
+            <span>quality</span>
+            <input type="range" min={0.5} max={1} step={0.25} value={quality}
+              onChange={(e) => setQuality(+e.target.value)} />
+            <output>{Math.round(quality * 100)}%</output>
+          </label>
+        </section>
       </aside>
+
       <footer className="clocks">
         <FarClock simRef={simRef} />
         {clocks.map((c) => (
@@ -88,6 +194,14 @@ export default function App() {
             onRelease={releaseClock} onRemove={removeClock} />
         ))}
       </footer>
+
+      <div className="caption">
+        {showCaption && <em>{caption}</em>}
+        <button onClick={() => setShowCaption(!showCaption)}
+          aria-label={showCaption ? 'hide captions' : 'show captions'}>
+          ?!
+        </button>
+      </div>
     </>
   )
 }

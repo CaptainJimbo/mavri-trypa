@@ -35,8 +35,8 @@ export interface SimState {
 /** Sim time units (r_s/c) per wall-clock second. */
 export const TIME_SCALE = 2.5
 
-export function advanceSim(sim: SimState, dtWall: number) {
-  const dt = Math.min(dtWall, 0.1) * TIME_SCALE
+export function advanceSim(sim: SimState, dtWall: number, rate = 1) {
+  const dt = Math.min(dtWall, 0.1) * TIME_SCALE * rate
   sim.t += dt
   for (const e of Object.values(sim.m)) {
     if (!e.falling) {

@@ -46,7 +46,8 @@ precision highp float;
 uniform sampler2D uSky;
 uniform sampler2D uBB; // blackbody LUT: rgb = chromaticity, a = log10 luminance
 uniform float uYaw, uPitch, uFov, uAspect, uCamDist;
-uniform float uDisc, uBeaming, uShift;
+uniform float uDisc, uBeaming, uShift, uOverlays;
+uniform float uDiscTemp, uDiscOut;
 uniform int uNClocks;
 uniform vec3 uClockPos[3];
 uniform float uClockR[3]; // |uClockPos|, for the radial-band early-out
@@ -59,8 +60,6 @@ out vec4 outColor;
 
 const float PI = 3.14159265358979;
 const float DISC_IN = 3.0;   // ISCO
-const float DISC_OUT = 12.0;
-const float DISC_TEMP = 9000.0; // K at the inner edge
 const float CLOCK_RAD = 0.35;
 const float STAR_RAD = 0.7;
 const float GRID_DIST = 20.0; // backdrop plane, this far behind the hole
@@ -93,7 +92,7 @@ vec4 blackbody(float T) {
 }
 
 vec3 shadeDisc(float r, float bz) {
-  float T = DISC_TEMP * pow(r / DISC_IN, -0.75);
+  float T = uDiscTemp * pow(r / DISC_IN, -0.75);
   float ff = 1.0 - 1.5 / r;          // circular-orbit dilation (grav + transverse)
   float f0 = 1.0 - 1.0 / uCamDist;   // static-camera potential
   float Omega = inversesqrt(2.0 * r * r * r);
@@ -182,12 +181,17 @@ void main() {
     float bestR = 0.0, bestQ = 0.0;
     int bestClock = -1;
 
-    if (uDisc > 0.5 && !edgeOn) {
+    if ((uDisc > 0.5 || uOverlays > 0.5) && !edgeOn) {
       float s = n1 * cph + n2 * sph;
-      if (s * sPrev < 0.0) { // crossed the disc plane during this step
+      if (s * sPrev < 0.0) { // crossed the equatorial plane during this step
         float frac = sPrev / (sPrev - s);
         float rHit = 1.0 / mix(uPrev, y.x, frac);
-        if (rHit >= DISC_IN && rHit <= DISC_OUT) {
+        if (uOverlays > 0.5) { // labeled rings: horizon, photon sphere, ISCO
+          if (abs(rHit - 1.0) < 0.05) { outColor = vec4(1.0, 0.35, 0.28, 1.0); return; }
+          if (abs(rHit - 1.5) < 0.07) { outColor = vec4(0.33, 0.78, 1.0, 1.0); return; }
+          if (abs(rHit - 3.0) < 0.12) { outColor = vec4(1.0, 0.76, 0.30, 1.0); return; }
+        }
+        if (uDisc > 0.5 && rHit >= DISC_IN && rHit <= uDiscOut) {
           bestT = frac;
           bestR = rHit;
         }
@@ -285,6 +289,11 @@ export interface View {
   disc: boolean
   beaming: boolean
   shift: boolean
+  overlays: boolean
+  discTemp: number // K at the inner edge
+  discOut: number  // outer radius, r_s
+  timeRate: number // multiplier on the sim clock
+  quality: number  // internal resolution scale 0.5..1
 }
 
 export type SandMode = 'none' | 'star' | 'grid'
@@ -358,6 +367,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ghostRef = useRef<HTMLDivElement>(null)
+  const readoutRef = useRef<HTMLDivElement>(null)
   const starPos = useRef<[number, number, number] | null>(null)
   const viewRef = useRef(view)
   viewRef.current = view
@@ -400,6 +410,8 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     const uFov = uni('uFov'), uAspect = uni('uAspect')
     const uCamDist = uni('uCamDist')
     const uDisc = uni('uDisc'), uBeaming = uni('uBeaming'), uShift = uni('uShift')
+    const uOverlays = uni('uOverlays')
+    const uDiscTemp = uni('uDiscTemp'), uDiscOut = uni('uDiscOut')
     const uNClocks = uni('uNClocks')
     const uClockPos = uni('uClockPos[0]')
     const uClockR = uni('uClockR[0]')
@@ -452,8 +464,9 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     gl.uniform1i(uni('uSky'), 0)
     gl.uniform1i(uni('uBB'), 1)
 
+    let lastQuality = viewRef.current.quality
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio, 2)
+      const dpr = Math.min(window.devicePixelRatio, 2) * lastQuality
       canvas.width = Math.round(canvas.clientWidth * dpr)
       canvas.height = Math.round(canvas.clientHeight * dpr)
     }
@@ -535,10 +548,14 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     let raf = 0
     const frame = (now: number) => {
       raf = requestAnimationFrame(frame)
-      advanceSim(simRef.current, (now - last) / 1000)
+      const v = viewRef.current
+      advanceSim(simRef.current, (now - last) / 1000, v.timeRate)
       last = now
       if (!skyReady) return
-      const v = viewRef.current
+      if (v.quality !== lastQuality) {
+        lastQuality = v.quality
+        resize()
+      }
       gl.viewport(0, 0, canvas.width, canvas.height)
       gl.uniform1f(uYaw, cam.yaw)
       gl.uniform1f(uPitch, cam.pitch)
@@ -548,6 +565,13 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
       gl.uniform1f(uDisc, v.disc ? 1 : 0)
       gl.uniform1f(uBeaming, v.beaming ? 1 : 0)
       gl.uniform1f(uShift, v.shift ? 1 : 0)
+      gl.uniform1f(uOverlays, v.overlays ? 1 : 0)
+      gl.uniform1f(uDiscTemp, v.discTemp)
+      gl.uniform1f(uDiscOut, v.discOut)
+      if (readoutRef.current) {
+        readoutRef.current.textContent =
+          `r ${cam.dist.toFixed(1)} rₛ · i ${(cam.pitch * 180 / Math.PI).toFixed(0)}°`
+      }
       let n = 0
       const fCam = 1 - 1 / cam.dist
       for (const c of clocksRef.current) {
@@ -617,6 +641,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
       <div ref={ghostRef} className="ghost" style={{ display: 'none' }}>
         <span>true position</span>
       </div>
+      <div ref={readoutRef} className="cam-readout" />
     </>
   )
 }
