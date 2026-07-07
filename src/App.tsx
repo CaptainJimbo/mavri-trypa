@@ -6,7 +6,7 @@ export default function App() {
       <BlackHoleCanvas />
       <header className="hud">
         <h1>Μαύρη Τρύπα</h1>
-        <p className="hint">drag to look around · scroll to zoom</p>
+        <p className="hint">drag to orbit · scroll to approach</p>
       </header>
     </>
   )

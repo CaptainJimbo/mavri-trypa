@@ -1,9 +1,16 @@
 import { useEffect, useRef } from 'react'
 
-/** Build-spine step 1: fullscreen-quad WebGL2 renderer showing the star
- * skybox with an orbit camera. The geodesic ray tracer will replace the
- * straight-line ray in this shader in step 2 — the camera model, equirect
- * sampling, and render loop are already the final ones.
+/** Build-spine step 2: per-pixel Schwarzschild null geodesics. Each ray is
+ * integrated in its orbital plane in Binet form u(φ) = 1/r (units rₛ = 1):
+ *
+ *   u″ = −u(1 − 1.5u)
+ *
+ * RK4, fixed dφ step. Capture (u > 1) → black; escape → sky along the exit
+ * direction −u′·r̂ + u·θ̂. The shadow and photon ring are not drawn — they
+ * emerge from rays with impact parameter under b_crit = 3√3/2 rₛ never
+ * reaching the sky. Written from scratch; the Binet-form initial conditions
+ * follow the approach in oseiskar/black-hole (MIT) — see
+ * docs/PRIOR_ART_NOTES.md (their integrand has a typo we don't inherit).
  *
  * Skybox: NASA SVS "Deep Star Maps 2020" (public domain), tonemapped from
  * the source EXR (exposure ×2, sRGB gamma). https://svs.gsfc.nasa.gov/4851
@@ -20,7 +27,7 @@ void main() {
 const FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D uSky;
-uniform float uYaw, uPitch, uFov, uAspect;
+uniform float uYaw, uPitch, uFov, uAspect, uCamDist;
 in vec2 vPos;
 out vec4 outColor;
 
@@ -44,16 +51,67 @@ vec3 skyColor(vec3 d) {
   return texture(uSky, uv).rgb;
 }
 
+// Binet system: y = (u, du/dphi), y' = (u', -u(1 - 1.5u))
+vec2 geodesicRHS(vec2 y) {
+  return vec2(y.y, -y.x * (1.0 - 1.5 * y.x));
+}
+
+const int MAX_STEPS = 400;
+const float DPHI = 0.025;
+
 void main() {
+  // Orbit camera: on a sphere of radius uCamDist (units of r_s), looking at
+  // the hole at the origin.
   float cy = cos(uYaw), sy = sin(uYaw);
   float cp = cos(uPitch), sp = sin(uPitch);
-  vec3 forward = vec3(cp * cy, sp, cp * sy);
+  vec3 camPos = uCamDist * vec3(cp * cy, sp, cp * sy);
+  vec3 forward = -normalize(camPos);
   vec3 right = normalize(cross(forward, vec3(0.0, 1.0, 0.0)));
   vec3 up = cross(right, forward);
 
   float t = tan(uFov * 0.5);
-  vec3 dir = normalize(forward + vPos.x * t * uAspect * right + vPos.y * t * up);
-  outColor = vec4(skyColor(dir), 1.0);
+  vec3 d = normalize(forward + vPos.x * t * uAspect * right + vPos.y * t * up);
+
+  // The geodesic stays in the plane spanned by the radial direction e1 and
+  // the tangential part e2 of the ray; phi is the angle from e1.
+  float r0 = uCamDist;
+  vec3 e1 = camPos / r0;
+  float ddotr = dot(d, e1);
+  vec3 dperp = d - ddotr * e1;
+  float dtan = length(dperp);
+  if (dtan < 1e-5) { // purely radial ray: outward sees sky, inward the hole
+    outColor = ddotr > 0.0 ? vec4(skyColor(d), 1.0) : vec4(vec3(0.0), 1.0);
+    return;
+  }
+  vec3 e2 = dperp / dtan;
+
+  vec2 y = vec2(1.0 / r0, -(1.0 / r0) * ddotr / dtan);
+  float phi = 0.0;
+  bool escaped = false;
+  for (int i = 0; i < MAX_STEPS; i++) {
+    vec2 k1 = geodesicRHS(y);
+    vec2 k2 = geodesicRHS(y + 0.5 * DPHI * k1);
+    vec2 k3 = geodesicRHS(y + 0.5 * DPHI * k2);
+    vec2 k4 = geodesicRHS(y + DPHI * k3);
+    y += (DPHI / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
+    phi += DPHI;
+    if (y.x > 1.0) break;                        // r < r_s: captured
+    if (y.x < 0.0 || (y.y < 0.0 && y.x < 0.01)) { // outbound and far: escaped
+      escaped = true;
+      break;
+    }
+  }
+  // Rays that exhaust the step budget are winding at the photon sphere;
+  // painting them black merges them into the shadow edge.
+  if (!escaped) {
+    outColor = vec4(vec3(0.0), 1.0);
+    return;
+  }
+  // Instantaneous travel direction: dx/dphi ∝ -u' r_hat + u theta_hat
+  vec3 rhat = cos(phi) * e1 + sin(phi) * e2;
+  vec3 that = -sin(phi) * e1 + cos(phi) * e2;
+  vec3 outDir = normalize(-y.y * rhat + max(y.x, 0.0) * that);
+  outColor = vec4(skyColor(outDir), 1.0);
 }`
 
 export default function BlackHoleCanvas() {
@@ -89,9 +147,11 @@ export default function BlackHoleCanvas() {
     const uni = (name: string) => gl.getUniformLocation(program, name)
     const uYaw = uni('uYaw'), uPitch = uni('uPitch')
     const uFov = uni('uFov'), uAspect = uni('uAspect')
+    const uCamDist = uni('uCamDist')
 
-    // Camera state (mutated by input handlers, read by the render loop)
-    const cam = { yaw: 0.3, pitch: 0.1, fov: (60 * Math.PI) / 180 }
+    // Camera state (mutated by input handlers, read by the render loop).
+    // dist is in units of r_s.
+    const cam = { yaw: 0.3, pitch: 0.1, dist: 12, fov: (60 * Math.PI) / 180 }
 
     let skyReady = false
     const sky = gl.createTexture()
@@ -135,7 +195,8 @@ export default function BlackHoleCanvas() {
     canvas.addEventListener('pointerup', () => { dragging = false }, { signal })
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault()
-      cam.fov = Math.max(0.26, Math.min(1.75, cam.fov * Math.exp(e.deltaY * 0.001)))
+      // 2.5 r_s floor keeps the camera outside the photon sphere (1.5 r_s)
+      cam.dist = Math.max(2.5, Math.min(40, cam.dist * Math.exp(e.deltaY * 0.001)))
     }, { signal, passive: false })
 
     let raf = 0
@@ -147,6 +208,7 @@ export default function BlackHoleCanvas() {
       gl.uniform1f(uPitch, cam.pitch)
       gl.uniform1f(uFov, cam.fov)
       gl.uniform1f(uAspect, canvas.width / canvas.height)
+      gl.uniform1f(uCamDist, cam.dist)
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
     }
     raf = requestAnimationFrame(frame)
