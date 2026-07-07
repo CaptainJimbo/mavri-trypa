@@ -59,3 +59,62 @@ html, body, #root {
 .panel input {
   accent-color: #ffa033;
 }
+
+.clocks {
+  position: fixed;
+  bottom: 1.2rem;
+  left: 1.4rem;
+  display: flex;
+  gap: 0.6rem;
+  user-select: none;
+}
+.clock-card {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.5rem 0.65rem;
+  background: rgba(10, 10, 14, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  font-size: 0.72rem;
+}
+.face {
+  width: 44px;
+  height: 44px;
+  border: 2px solid #777;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+}
+.hand {
+  position: absolute;
+  left: calc(50% - 1px);
+  top: 4px;
+  width: 2px;
+  height: 18px;
+  background: #ffa033;
+  transform-origin: 50% 100%;
+}
+.clock-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 7.5rem;
+}
+.clock-info .dim { opacity: 0.55; }
+.clock-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+.clock-actions em { color: #ffa033; font-style: normal; }
+.clock-actions button {
+  background: none;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+  color: #ddd;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  cursor: pointer;
+}
+.clock-actions button:hover { border-color: #ffa033; }
