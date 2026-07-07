@@ -47,7 +47,7 @@ uniform sampler2D uSky;
 uniform sampler2D uBB; // blackbody LUT: rgb = chromaticity, a = log10 luminance
 uniform float uYaw, uPitch, uFov, uAspect, uCamDist;
 uniform float uDisc, uBeaming, uShift, uOverlays;
-uniform float uDiscTemp, uDiscOut;
+uniform float uDiscTemp, uDiscOut, uExposure;
 uniform int uNClocks;
 uniform vec3 uClockPos[3];
 uniform float uClockR[3]; // |uClockPos|, for the radial-band early-out
@@ -100,7 +100,7 @@ vec3 shadeDisc(float r, float bz) {
   float Tc = uShift > 0.5 ? delta * T : T;   // shift owns the color
   float Tb = uBeaming > 0.5 ? delta * T : T; // beaming owns the brightness
   vec3 lin = blackbody(Tc).rgb * blackbody(Tb).a;
-  return pow(1.0 - exp(-1.5 * lin), vec3(1.0 / 2.2)); // exposure + gamma
+  return pow(1.0 - exp(-1.5 * uExposure * lin), vec3(1.0 / 2.2)); // exposure + gamma
 }
 
 vec3 shadeClock(int i, float q) {
@@ -292,6 +292,7 @@ export interface View {
   overlays: boolean
   discTemp: number // K at the inner edge
   discOut: number  // outer radius, r_s
+  exposure: number // camera exposure multiplier for the disc
   timeRate: number // multiplier on the sim clock
   quality: number  // internal resolution scale 0.5..1
 }
@@ -412,6 +413,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
     const uDisc = uni('uDisc'), uBeaming = uni('uBeaming'), uShift = uni('uShift')
     const uOverlays = uni('uOverlays')
     const uDiscTemp = uni('uDiscTemp'), uDiscOut = uni('uDiscOut')
+    const uExposure = uni('uExposure')
     const uNClocks = uni('uNClocks')
     const uClockPos = uni('uClockPos[0]')
     const uClockR = uni('uClockR[0]')
@@ -568,6 +570,7 @@ export default function BlackHoleCanvas({ view, clocks, simRef, onPlace, sandbox
       gl.uniform1f(uOverlays, v.overlays ? 1 : 0)
       gl.uniform1f(uDiscTemp, v.discTemp)
       gl.uniform1f(uDiscOut, v.discOut)
+      gl.uniform1f(uExposure, v.exposure)
       if (readoutRef.current) {
         readoutRef.current.textContent =
           `r ${cam.dist.toFixed(1)} rₛ · i ${(cam.pitch * 180 / Math.PI).toFixed(0)}°`

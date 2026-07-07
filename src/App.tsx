@@ -25,6 +25,7 @@ export default function App() {
   const [overlays, setOverlays] = useState(false)
   const [discTemp, setDiscTemp] = useState(9000)
   const [discOut, setDiscOut] = useState(12)
+  const [exposure, setExposure] = useState(1)
   const [timeRate, setTimeRate] = useState(1)
   const [quality, setQuality] = useState(1)
   const [logM, setLogM] = useState(1)
@@ -82,7 +83,7 @@ export default function App() {
   return (
     <>
       <BlackHoleCanvas
-        view={{ disc, beaming, shift, overlays, discTemp, discOut, timeRate, quality }}
+        view={{ disc, beaming, shift, overlays, discTemp, discOut, exposure, timeRate, quality }}
         clocks={clocks} simRef={simRef} onPlace={placeClock}
         sandbox={{ mode: sandMode, showTrue }} />
       <header className="hud">
@@ -139,9 +140,15 @@ export default function App() {
           </label>
           <label className="slider">
             <span>temp</span>
-            <input type="range" min={3000} max={20000} step={250} value={discTemp}
+            <input type="range" min={1500} max={20000} step={250} value={discTemp}
               disabled={!disc} onChange={(e) => setDiscTemp(+e.target.value)} />
             <output>{discTemp} K at ISCO</output>
+          </label>
+          <label className="slider">
+            <span>exposure</span>
+            <input type="range" min={0} max={6} step={0.5} value={Math.log2(exposure)}
+              disabled={!disc} onChange={(e) => setExposure(2 ** +e.target.value)} />
+            <output>×{exposure}</output>
           </label>
           <label className="slider">
             <span>size</span>
