@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import BlackHoleCanvas, { type SandMode } from './BlackHoleCanvas'
 import { ClockCard, FarClock } from './ClockPanel'
 import type { ClockInfo, SimState } from './clocks'
@@ -27,13 +27,35 @@ export default function App() {
   const [discOut, setDiscOut] = useState(12)
   const [exposure, setExposure] = useState(1)
   const [timeRate, setTimeRate] = useState(1)
-  const [quality, setQuality] = useState(1)
+  // Fixed at half internal resolution: full-res ray tracing is smooth on
+  // Apple Silicon but laggy on typical hardware hitting the public page.
+  const quality = 0.5
   const [logM, setLogM] = useState(1)
   const [clocks, setClocks] = useState<ClockInfo[]>([])
   const [sandMode, setSandMode] = useState<SandMode>('none')
   const [showTrue, setShowTrue] = useState(true)
   const [showCaption, setShowCaption] = useState(true)
+  const [rackOpen, setRackOpen] = useState(true)
   const simRef = useRef<SimState>({ t: 0, m: {} })
+  const rackRef = useRef<HTMLElement>(null)
+
+  // Left-edge grip: the rack is pinned right, so dragging LEFT widens it
+  const gripDown = (e: ReactPointerEvent) => {
+    e.preventDefault()
+    const rack = rackRef.current!
+    const startW = rack.offsetWidth
+    const startX = e.clientX
+    const move = (ev: PointerEvent) => {
+      const w = Math.min(420, Math.max(210, startW + (startX - ev.clientX)))
+      rack.style.width = `${w}px`
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   const placeClock = useCallback((dir: [number, number, number], r: number) => {
     setClocks((cs) => {
@@ -93,7 +115,15 @@ export default function App() {
         </p>
       </header>
 
-      <aside className="rack">
+      {!rackOpen && (
+        <button className="rack-show" onClick={() => setRackOpen(true)}
+          aria-label="show controls">«</button>
+      )}
+      <aside className="rack" ref={rackRef} hidden={!rackOpen}>
+        <div className="rack-grip" onPointerDown={gripDown} aria-hidden />
+        <button className="rack-hide" onClick={() => setRackOpen(false)}
+          aria-label="hide controls">»</button>
+        <div className="rack-body">
         <section>
           <h2>spacetime</h2>
           <label className="slider">
@@ -148,7 +178,7 @@ export default function App() {
             <span>exposure</span>
             <input type="range" min={0} max={6} step={0.5} value={Math.log2(exposure)}
               disabled={!disc} onChange={(e) => setExposure(2 ** +e.target.value)} />
-            <output>×{exposure}</output>
+            <output>×{exposure >= 10 ? Math.round(exposure) : +exposure.toFixed(1)}</output>
           </label>
           <label className="slider">
             <span>size</span>
@@ -178,20 +208,15 @@ export default function App() {
         </section>
 
         <section>
-          <h2>clocks &amp; render</h2>
+          <h2>clocks</h2>
           <label className="slider">
             <span>time</span>
             <input type="range" min={0.25} max={8} step={0.25} value={timeRate}
               onChange={(e) => setTimeRate(+e.target.value)} />
             <output>×{timeRate}</output>
           </label>
-          <label className="slider">
-            <span>quality</span>
-            <input type="range" min={0.5} max={1} step={0.25} value={quality}
-              onChange={(e) => setQuality(+e.target.value)} />
-            <output>{Math.round(quality * 100)}%</output>
-          </label>
         </section>
+        </div>
       </aside>
 
       <footer className="clocks">
