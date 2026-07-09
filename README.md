@@ -1,8 +1,14 @@
 # Μαύρη Τρύπα 🕳️
 
+![Μαύρη Τρύπα: a Schwarzschild black hole ray-traced live in WebGL — turbulent accretion disc, labeled radii, and three dropped clocks ticking at their own rates](docs/hero.webp)
+
 **An interactive general-relativistic black hole in your browser.**
 Real geodesic ray tracing in a WebGL fragment shader — every pixel's light ray
 bent through curved spacetime, not a lens-blur fake. Physics with sliders.
+
+### ▶ [Launch it — captainjimbo.github.io/mavri-trypa](https://captainjimbo.github.io/mavri-trypa/)
+
+Drag to orbit · scroll to approach · click to drop a clock.
 
 ## What you can do
 
@@ -14,9 +20,9 @@ bent through curved spacetime, not a lens-blur fake. Physics with sliders.
 - **Drop a clock toward the horizon** ⏰ — watch it tick slower and slower
   next to your own clock (real time-dilation factor √(1−rₛ/r)), redden, dim,
   and freeze forever at the horizon. The classic "wait... WHAT?!" of GR, live.
-- **Put things behind the hole** — drag a star, a galaxy image, or a checker
-  grid behind it and watch Einstein rings and double images form; cross the
-  caustic and see images split and merge.
+- **Put things behind the hole** — drag a star or place a checkerboard
+  backdrop behind it and watch Einstein rings and double images form; cross
+  the caustic and see images split and merge.
 - **Toggle each effect separately** — lensing / beaming / redshift on-off
   switches, so you can *see what each one contributes* instead of one
   undifferentiated "cool shader".
